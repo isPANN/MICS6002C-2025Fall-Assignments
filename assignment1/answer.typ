@@ -36,11 +36,10 @@ table(
   columns: (auto, auto, auto),
   align: center,
   table.header([*Averaged over 10 runs*], [Single-threaded], [Multithreaded (4 threads)]),
-  [Real Runtime (s)], [(0.421)#footnote([Directly using a two-dimensional array in the multithreaded version can compile successfully, but it causes a *bus error* at execution. I guess this is related to macOS. Therefore, I changed the local `sum` array to a one-dimensional `std::vector<int>` allocated on the heap. In principle, the single-threaded version should adopt the same data structure for consistency, but this makes it significantly slower, with results of:
-real: 8.428 s, user: 8.248 s, sys: 0.018 s. Therefore, it is placed here only for reference.])], [0.123],
-  [User CPU Time (s)], [(0.421)], [0.396],
-  [System CPU Time (s)], [(0.000)], [0.000],
-  [Speedup($times$)], [--], [3.42],
+  [Real Runtime (s)], [2.791], [0.793],
+  [User CPU Time (s)], [2.779], [2.859],
+  [System CPU Time (s)], [0.005], [0.012],
+  [Speedup($times$)], [--], [3.52],
 )))
 
 In the multithreaded results, the User CPU time is less than four times the Real time, indicating that the workload did not fully scale across all four threads. This contrasts with the single-threaded case, where the User CPU time closely matches the Real time, since all computation is executed on a single core without parallel overlap.
