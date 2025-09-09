@@ -25,7 +25,7 @@ The original single-threaded program initializes four $N times N$ integer matric
 To evaluate the performance difference, both the single-threaded and multithreaded versions were compiled with identical options and executed multiple times on the same machine. The average runtimes over 10 runs were measured using the `time` command. The results, summarized in the table below, clearly show that the multithreaded implementation achieves a substantial reduction in execution time compared to the single-threaded version.
 
 #codly(languages: codly-languages)
-- CPU: Apple M3 with 8 cores
+- The system is equipped with dual Intel Xeon Platinum 8378A processors (x86_64), providing 64 cores and 128 threads at 3.0 GHz.
 - Compile command:```
 ❯ g++ -std=c++14 -O2 -pthread -o multi multi.cpp
 ```
@@ -42,6 +42,6 @@ table(
   [Speedup($times$)], [--], [3.52],
 )))
 
-In the multithreaded results, the User CPU time is less than four times the Real time, indicating that the workload did not fully scale across all four threads. This contrasts with the single-threaded case, where the User CPU time closely matches the Real time, since all computation is executed on a single core without parallel overlap.
+The multithreaded run achieved a 3.52$times$ speedup. However, the User CPU time is less than four times the Real time, indicating incomplete parallel scaling across the four threads, unlike the single-threaded case where User and Real time nearly coincide.
 = Description of Multithreaded Version
 Each of the four threads multiplies two matrices and stores partial results in `sum`. After computing, the threads acquire a `mutex` to safely update the shared global `total`.
