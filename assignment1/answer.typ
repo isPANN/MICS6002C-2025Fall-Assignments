@@ -29,7 +29,7 @@ To evaluate the performance difference, both the single-threaded and multithread
 - Compile command:```
 ❯ g++ -std=c++14 -O2 -pthread -o multi multi.cpp
 ```
-
+- Result: 50168
 #align(center, 
 figure(caption: "Runtime Comparison",
 table(
@@ -45,3 +45,4 @@ table(
 The multithreaded run achieved a 3.52$times$ speedup. However, the User CPU time is less than four times the Real time, indicating incomplete parallel scaling across the four threads, unlike the single-threaded case where User and Real time nearly coincide.
 = Description of Multithreaded Version
 Each of the four threads multiplies two matrices and stores partial results in `sum`. After computing, the threads acquire a `mutex` to safely update the shared global `total`.
+
