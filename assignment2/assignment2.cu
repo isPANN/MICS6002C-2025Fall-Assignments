@@ -1,10 +1,10 @@
 #include <iostream>
 #include <vector>
 #include <chrono>
+#include <iomanip>
+#include <cstdlib>
 
-const int N = 1024;
-
-std::vector<std::vector<int>> create_matrix() {
+std::vector<std::vector<int>> create_matrix(int N) {
     srand(0);
     std::vector<std::vector<int>> mat(N, std::vector<int> (N));
     for (int i = 0; i < N; i++) {
@@ -15,7 +15,7 @@ std::vector<std::vector<int>> create_matrix() {
     return mat;
 }
 
-std::vector<std::vector<int>> gemm(std::vector<std::vector<int>> &a, std::vector<std::vector<int>> &b) {
+std::vector<std::vector<int>> gemm(std::vector<std::vector<int>> &a, std::vector<std::vector<int>> &b, int N) {
     std::vector<std::vector<int>> mat(N, std::vector<int> (N, 0));
     for (int k = 0; k < N; k++) {
         for (int i = 0; i < N; i++) {
@@ -27,7 +27,7 @@ std::vector<std::vector<int>> gemm(std::vector<std::vector<int>> &a, std::vector
     return mat;
 }
 
-void mem_copy(std::vector<std::vector<int>> &a, int *d_a) {
+void mem_copy(std::vector<std::vector<int>> &a, int *d_a, int N) {
     int *temp = new int[N * N];
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
@@ -37,7 +37,8 @@ void mem_copy(std::vector<std::vector<int>> &a, int *d_a) {
     cudaMemcpy(d_a, temp, sizeof(int) * N * N, cudaMemcpyHostToDevice);
     delete []temp;
 }
-void check(int *d_a, std::vector<std::vector<int>> &a) {
+
+void check(int *d_a, std::vector<std::vector<int>> &a, int N) {
     bool equal = true;
     int *temp = new int[N * N];
     cudaMemcpy(temp, d_a, sizeof(int) * N * N, cudaMemcpyDeviceToHost);
@@ -70,94 +71,174 @@ __global__ void d_gemm2(int *a, int *b, int *c, int n) {
 }
 
 __global__ void d_gemm_tiled(int *a, int *b, int *c, int n) {
-    // Define tile size
-    const int TILE_SIZE = 32;
+    const int TILE_SIZE = 16;
     
-    // Calculate thread and block indices
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int bx = blockIdx.x;
-    int by = blockIdx.y;
+    int tx = threadIdx.x; // column within tile
+    int ty = threadIdx.y; // row within tile
     
-    // Calculate global row and column indices
+    int bx = blockIdx.x; // block column
+    int by = blockIdx.y; // block row
+    
     int row = by * TILE_SIZE + ty;
     int col = bx * TILE_SIZE + tx;
     
-    // Shared memory for tiles
-    __shared__ int As[TILE_SIZE][TILE_SIZE];
-    __shared__ int Bs[TILE_SIZE][TILE_SIZE];
+    // Shared memory tiles for A and B matrices
+    __shared__ int tile_A[TILE_SIZE][TILE_SIZE];
+    __shared__ int tile_B[TILE_SIZE][TILE_SIZE];
     
-    int sum = 0;
+    int result = 0;
     
-    // Number of tiles needed
+    // Calculate how many tiles we need to process
     int num_tiles = (n + TILE_SIZE - 1) / TILE_SIZE;
     
-    // Iterate over tiles
-    for (int tile = 0; tile < num_tiles; tile++) {
-        // Load tile of A into shared memory
-        int a_row = by * TILE_SIZE + ty;
-        int a_col = tile * TILE_SIZE + tx;
+    // Loop through all tiles
+    for (int t = 0; t < num_tiles; t++) {
+        // Load tile from matrix A into shared memory
+        int a_row = row;
+        int a_col = t * TILE_SIZE + tx;
         if (a_row < n && a_col < n) {
-            As[ty][tx] = a[a_row * n + a_col];
+            tile_A[ty][tx] = a[a_row * n + a_col];
         } else {
-            As[ty][tx] = 0;
+            tile_A[ty][tx] = 0; // Padding with zeros
         }
         
-        // Load tile of B into shared memory
-        int b_row = tile * TILE_SIZE + ty;
-        int b_col = bx * TILE_SIZE + tx;
+        // Load tile from matrix B into shared memory
+        int b_row = t * TILE_SIZE + ty;
+        int b_col = col;
         if (b_row < n && b_col < n) {
-            Bs[ty][tx] = b[b_row * n + b_col];
+            tile_B[ty][tx] = b[b_row * n + b_col];
         } else {
-            Bs[ty][tx] = 0;
+            tile_B[ty][tx] = 0; // Padding with zeros
         }
         
-        // Synchronize to ensure all threads have loaded their data
+        // Wait for all threads to finish loading
         __syncthreads();
         
-        // Compute partial sum for this tile
+        // Compute partial dot product using loaded tiles
         for (int k = 0; k < TILE_SIZE; k++) {
-            sum += As[ty][k] * Bs[k][tx];
+            result += tile_A[ty][k] * tile_B[k][tx];
         }
         
-        // Synchronize before loading next tile
+        // Wait before loading next tile
         __syncthreads();
     }
     
     // Write result to global memory
     if (row < n && col < n) {
-        c[row * n + col] = sum;
+        c[row * n + col] = result;
     }
 }
 
-int main() {
-
-    auto a = create_matrix();
-    auto b = create_matrix();
+void test_matrix_size(int N) {
+    std::cout << "\n=== Testing Matrix Size: " << N << "x" << N << " ===" << std::endl;
     
+    auto a = create_matrix(N);
+    auto b = create_matrix(N);
+    
+    // CPU matrix multiplication for verification
     auto cpu_gemm_start = std::chrono::high_resolution_clock::now();
-    auto c = gemm(a, b);
+    auto c = gemm(a, b, N);
     auto cpu_gemm_end = std::chrono::high_resolution_clock::now();
-
-    int *d_a, *d_b, *d_c; // on device
+    
+    // Allocate GPU memory
+    int *d_a, *d_b, *d_c;
     cudaMalloc(&d_a, N * N * sizeof(int));
     cudaMalloc(&d_b, N * N * sizeof(int));
     cudaMalloc(&d_c, N * N * sizeof(int));
-
-    mem_copy(a, d_a);
-    mem_copy(b, d_b);
-
-    auto simple_gpu_gemm_start = std::chrono::high_resolution_clock::now();
-    // Use tiled kernel with 2D block and grid configuration
-    dim3 blockSize(32, 32);  // 32x32 threads per block
-    dim3 gridSize((N + 31) / 32, (N + 31) / 32);  // Calculate number of blocks needed
-    d_gemm_tiled<<<gridSize, blockSize>>> (d_a, d_b, d_c, N);
+    
+    // Copy data to GPU
+    mem_copy(a, d_a, N);
+    mem_copy(b, d_b, N);
+    
+    // GPU matrix multiplication using simple tiled kernel
+    auto gpu_gemm_start = std::chrono::high_resolution_clock::now();
+    
+    // Configure grid and block dimensions for simple tiled kernel
+    const int TILE_SIZE = 16; // Same as in the kernel
+    dim3 blockSize(TILE_SIZE, TILE_SIZE); // 16x16 threads per block
+    dim3 gridSize((N + TILE_SIZE - 1) / TILE_SIZE, (N + TILE_SIZE - 1) / TILE_SIZE);
+    
+    d_gemm_tiled<<<gridSize, blockSize>>>(d_a, d_b, d_c, N);
     cudaDeviceSynchronize();
-    auto simple_gpu_gemm_end = std::chrono::high_resolution_clock::now();
-    check(d_c, c);
+    
+    auto gpu_gemm_end = std::chrono::high_resolution_clock::now();
+    
+    // Verify correctness
+    check(d_c, c, N);
+    
+    // Calculate and display timing results
+    auto cpu_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(cpu_gemm_end - cpu_gemm_start).count();
+    auto gpu_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(gpu_gemm_end - gpu_gemm_start).count();
+    
+    std::cout << "CPU GEMM Time: " << cpu_time_ns / 1000000.0 << " ms" << std::endl;
+    std::cout << "GPU GEMM Time: " << gpu_time_ns / 1000000.0 << " ms" << std::endl;
+    std::cout << "Speedup: " << (double)cpu_time_ns / gpu_time_ns << "x" << std::endl;
+    
+    cudaFree(d_a);
+    cudaFree(d_b);
+    cudaFree(d_c);
+}
 
-    std::cout << "CPU GEMM Time (ns): " << std::chrono::duration_cast<std::chrono::nanoseconds> (cpu_gemm_end - cpu_gemm_start).count() << std::endl;
-    std::cout << "GPU GEMM Time (ns): " << std::chrono::duration_cast<std::chrono::nanoseconds> (simple_gpu_gemm_end - simple_gpu_gemm_start).count() << std::endl;
+int main() {
+    std::cout << "Matrix Multiplication with Simple Loop Tiling" << std::endl;
+    std::cout << "=============================================" << std::endl;
 
+    std::cout << "Task 2: Test size 1024x1024" << std::endl;
+    test_matrix_size(1024);
+    
+    std::cout << "Task 3: Test different matrix sizes" << std::endl;
+    std::vector<int> sizes = {128, 256, 512, 1024};
+    
+    std::cout << "\n| Matrix Size | GPU Time (ms) | CPU Time (ms) | Speedup |" << std::endl;
+    std::cout << "|-------------|---------------|---------------|---------|" << std::endl;
+    
+    for (int N : sizes) {
+        auto a = create_matrix(N);
+        auto b = create_matrix(N);
+        
+        // CPU matrix multiplication
+        auto cpu_start = std::chrono::high_resolution_clock::now();
+        auto c = gemm(a, b, N);
+        auto cpu_end = std::chrono::high_resolution_clock::now();
+        
+        // Allocate GPU memory
+        int *d_a, *d_b, *d_c;
+        cudaMalloc(&d_a, N * N * sizeof(int));
+        cudaMalloc(&d_b, N * N * sizeof(int));
+        cudaMalloc(&d_c, N * N * sizeof(int));
+        
+        // Copy data to GPU
+        mem_copy(a, d_a, N);
+        mem_copy(b, d_b, N);
+        
+        // GPU matrix multiplication
+        auto gpu_start = std::chrono::high_resolution_clock::now();
+        
+        const int TILE_SIZE = 16;
+        dim3 blockSize(TILE_SIZE, TILE_SIZE);
+        dim3 gridSize((N + TILE_SIZE - 1) / TILE_SIZE, (N + TILE_SIZE - 1) / TILE_SIZE);
+        
+        d_gemm_tiled<<<gridSize, blockSize>>>(d_a, d_b, d_c, N);
+        cudaDeviceSynchronize();
+        
+        auto gpu_end = std::chrono::high_resolution_clock::now();
+        
+        check(d_c, c, N);
+        
+        auto cpu_time_ms = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_start).count() / 1000.0;
+        auto gpu_time_ms = std::chrono::duration_cast<std::chrono::microseconds>(gpu_end - gpu_start).count() / 1000.0;
+        double speedup = cpu_time_ms / gpu_time_ms;
+        
+        std::cout << "| " << N << "x" << N << "     | " << std::fixed << std::setprecision(2) 
+                  << gpu_time_ms << "        | " << cpu_time_ms << "        | " 
+                  << speedup << "x    |" << std::endl;
+        
+        cudaFree(d_a);
+        cudaFree(d_b);
+        cudaFree(d_c);
+    }
+    
+    std::cout << "\nNote: Using simple tiled kernel with 16x16 tile size" << std::endl;
+    
     return 0;
 }
