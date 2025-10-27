@@ -1,4 +1,3 @@
-// minimal_block_scan.cu
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <ctime>
@@ -42,7 +41,7 @@ __global__ void task_a_single_block_scan(const int* in, int* out, int n) {
         }
         __syncthreads();
         
-        // Blelloch up-sweep
+        // up-sweep
         for (int offset = 1; offset < chunk_size; offset <<= 1) {
             int idx = tid * (offset << 1) + (offset << 1) - 1;
             if (idx < chunk_size) {
@@ -62,7 +61,7 @@ __global__ void task_a_single_block_scan(const int* in, int* out, int n) {
         }
         __syncthreads();
         
-        // Blelloch down-sweep
+        // down-sweep
         for (int offset = chunk_size >> 1; offset >= 1; offset >>= 1) {
             int idx = tid * (offset << 1) + (offset << 1) - 1;
             if (idx < chunk_size) {
@@ -120,7 +119,7 @@ __global__ void task_b_phase1_block_scan(const int* in, int* out, int* block_sum
     }
     __syncthreads();
     
-    // Blelloch up-sweep
+    // up-sweep
     for (int offset = 1; offset < block_data_size; offset <<= 1) {
         int idx = tid * (offset << 1) + (offset << 1) - 1;
         if (idx < block_data_size) {
@@ -139,7 +138,7 @@ __global__ void task_b_phase1_block_scan(const int* in, int* out, int* block_sum
     }
     __syncthreads();
     
-    // Blelloch down-sweep
+    // down-sweep
     for (int offset = block_data_size >> 1; offset >= 1; offset >>= 1) {
         int idx = tid * (offset << 1) + (offset << 1) - 1;
         if (idx < block_data_size) {
@@ -287,7 +286,6 @@ int main() {
     int *d_in_A, *d_out_A;
     cudaMalloc(&d_in_A, N_A * sizeof(int));
     cudaMalloc(&d_out_A, N_A * sizeof(int));
-    cudaMemcpy(d_in_A, h_in_A, N_A * sizeof(int), cudaMemcpyHostToDevice);
     
     // Create events for Task A timing
     cudaEvent_t start_taskA_total, stop_taskA_total;
@@ -300,8 +298,11 @@ int main() {
     // Add padding for bank conflict avoidance
     int shared_mem_size_A = (2048 + (2048 >> 5)) * sizeof(int);
     
-    // Start total timing (including memory copy)
+    // Start total timing (including ALL memory copies)
     cudaEventRecord(start_taskA_total);
+    
+    // Host to Device memory copy
+    cudaMemcpy(d_in_A, h_in_A, N_A * sizeof(int), cudaMemcpyHostToDevice);
     
     // Start kernel-only timing
     cudaEventRecord(start_taskA_kernel);
@@ -309,7 +310,7 @@ int main() {
     cudaDeviceSynchronize();
     cudaEventRecord(stop_taskA_kernel);
     
-    // Memory copy
+    // Device to Host memory copy
     cudaMemcpy(h_out_A, d_out_A, N_A * sizeof(int), cudaMemcpyDeviceToHost);
     cudaEventRecord(stop_taskA_total);
     cudaEventSynchronize(stop_taskA_total);
@@ -334,7 +335,6 @@ int main() {
     int *d_in_B, *d_out_B;
     cudaMalloc(&d_in_B, N_B * sizeof(int));
     cudaMalloc(&d_out_B, N_B * sizeof(int));
-    cudaMemcpy(d_in_B, h_in_B, N_B * sizeof(int), cudaMemcpyHostToDevice);
     
     // Create events for Task B timing
     cudaEvent_t start_taskB_total, stop_taskB_total;
@@ -356,8 +356,11 @@ int main() {
     int shared_mem_size_B = (2048 + (2048 >> 5)) * sizeof(int);
     int shared_mem_phase2_B = (num_blocks_B + (num_blocks_B >> 5)) * sizeof(int);
     
-    // Start total timing (including memory copy)
+    // Start total timing (including ALL memory copies)
     cudaEventRecord(start_taskB_total);
+    
+    // Host to Device memory copy
+    cudaMemcpy(d_in_B, h_in_B, N_B * sizeof(int), cudaMemcpyHostToDevice);
     
     // Start kernel-only timing
     cudaEventRecord(start_taskB_kernel);
@@ -374,7 +377,7 @@ int main() {
     cudaDeviceSynchronize();
     cudaEventRecord(stop_taskB_kernel);
     
-    // Memory copy
+    // Device to Host memory copy
     cudaMemcpy(h_out_taskB, d_out_B, N_B * sizeof(int), cudaMemcpyDeviceToHost);
     cudaEventRecord(stop_taskB_total);
     cudaEventSynchronize(stop_taskB_total);
